@@ -10,6 +10,9 @@ app.use(express.json());
 
 const provider = new ethers.JsonRpcProvider(process.env.TESTNET_RPC);
 
+console.log("Using contract:", process.env.CONTRACT_ADDRESS);
+
+
 const contract = new ethers.Contract(
   process.env.CONTRACT_ADDRESS,
   InvoiceNFTAbi,
@@ -23,30 +26,32 @@ app.get("/api/verify/:txHash", async (req, res) => {
 
     const receipt = await provider.getTransactionReceipt(txHash);
 
-    console.log("receipt:", receipt);
-    console.log("logs:", receipt.logs);
-
     if (!receipt) {
       return res.status(404).json({ error: "Transaction not found" });
     }
 
-    // extract tokenId from Transfer event
-   const transferTopic = ethers.id("Transfer(address,address,uint256)");
+    // ✅ PROFESSIONAL ERC721 LOG DECODER (robust)
+    const iface = new ethers.Interface([
+      "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"
+    ]);
 
-const transferLog = receipt.logs.find(
-  (log) =>
-    log.topics &&
-    log.topics.length > 0 &&
-    log.topics[0].toLowerCase() === transferTopic.toLowerCase()
-);
+    let tokenId = null;
 
-if (!transferLog) {
-  console.log("No ERC721 Transfer event found");
-  return res.status(404).json({ error: "NFT Transfer event not found" });
-}
+    for (const log of receipt.logs) {
+      try {
+        const parsed = iface.parseLog(log);
+        if (parsed && parsed.name === "Transfer") {
+          tokenId = parsed.args.tokenId.toString();
+          break;
+        }
+      } catch (e) {
+        // ignore non‑transfer logs
+      }
+    }
 
-
-    const tokenId = ethers.getBigInt(transferLog.topics[3]).toString();
+    if (!tokenId) {
+      return res.status(404).json({ error: "No NFT Transfer found in tx" });
+    }
 
     const data = await contract.invoices(tokenId);
 
@@ -61,6 +66,7 @@ if (!transferLog) {
     });
 
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
